@@ -33,7 +33,13 @@ create table if not exists progress (
   card_id    text primary key references cards(id) on delete cascade,
   iv         double precision not null default 0,            -- інтервал до наступного повторення, дні
   reps       int not null default 0,
-  due        timestamptz not null
+  due        timestamptz not null,
+  first_seen date                                            -- день першого перегляду (денний ліміт нових карток)
+);
+
+create table if not exists settings (
+  key        text primary key,
+  value      jsonb not null
 );
 
 create table if not exists activity (
@@ -47,11 +53,12 @@ alter table cards    enable row level security;
 alter table labs     enable row level security;
 alter table progress enable row level security;
 alter table activity enable row level security;
+alter table settings enable row level security;
 
 do $$
 declare t text;
 begin
-  foreach t in array array['nodes', 'cards', 'labs', 'progress', 'activity'] loop
+  foreach t in array array['nodes', 'cards', 'labs', 'progress', 'activity', 'settings'] loop
     execute format('drop policy if exists owner_all on %I', t);
     execute format('create policy owner_all on %I for all to authenticated using (true) with check (true)', t);
   end loop;

@@ -1,4 +1,4 @@
-import { createApi } from "./api.js?v=3";
+import { createApi } from "./api.js?v=4";
 import { CONFIG } from "../config.js";
 
 const DAY = 86400000;
@@ -9,7 +9,8 @@ const S = {
   root: null,
   nodes: {},
   cards: [],
-  progress: {},     // card_id -> { iv, reps, due(ms) }
+  progress: {},     // card_id -> { iv, reps, due(ms), first('YYYY-MM-DD' | null) }
+  settings: { new_per_day: 20, extra: null },
   activity: {},     // 'YYYY-MM-DD' -> count
   labs: [],
   pending: {},      // зміни, які ще не збережено в базі
@@ -55,7 +56,14 @@ function buildModel(data) {
 
   S.labs = data.labs;
   S.progress = {};
-  data.progress.forEach((p) => { S.progress[p.card_id] = { iv: p.iv, reps: p.reps, due: new Date(p.due).getTime() }; });
+  data.progress.forEach((p) => {
+    S.progress[p.card_id] = { iv: p.iv, reps: p.reps, due: new Date(p.due).getTime(), first: p.first_seen ? String(p.first_seen).slice(0, 10) : null };
+  });
+  S.settings = { new_per_day: 20, extra: null };
+  (data.settings || []).forEach((r) => {
+    if (r.key === "new_per_day") S.settings.new_per_day = Number(r.value);
+    if (r.key === "extra_new") S.settings.extra = r.value;
+  });
   S.activity = {};
   data.activity.forEach((a) => { S.activity[String(a.day).slice(0, 10)] = a.count; });
   refreshInbox();
@@ -145,7 +153,30 @@ function fmt(iv) {
   if (iv < 30) return Math.round(iv) + " д";
   return Math.round(iv / 30) + " міс";
 }
-const hint = (c, grade) => fmt(calcIv(st(c) || { iv: 0, reps: 0 }, grade));
+// Інтервал після оцінки. Якщо картку повторюють раніше строку, ріст рахується від фактично минулого часу
+// і інтервал не скорочується: ранній перегляд дає менший ефект, ніж вчасний.
+function nextIv(c, grade) {
+  if (grade === 4) return 30;
+  const s = st(c) || { iv: 0, reps: 0 };
+  const early = grade > 0 && !!s.due && s.iv > 0 && Date.now() < s.due;
+  let base = s.iv;
+  if (early) {
+    const elapsed = (Date.now() - (s.due - s.iv * DAY)) / DAY;
+    base = Math.max(0, Math.min(s.iv, elapsed));
+  }
+  const iv = calcIv({ iv: base }, grade);
+  return early ? Math.max(iv, s.iv) : iv;
+}
+const hint = (c, grade) => fmt(nextIv(c, grade));
+
+// ===== Денний ліміт нових карток =====
+function extraToday() {
+  const e = S.settings.extra;
+  return e && e.day === dayKey(0) ? e.n : 0;
+}
+const limitToday = () => S.settings.new_per_day + extraToday();
+const newToday = () => Object.values(S.progress).filter((p) => p.first === dayKey(0)).length;
+const remainingNew = () => Math.max(0, limitToday() - newToday());
 
 // ===== Серія днів =====
 const p2 = (n) => (n < 10 ? "0" : "") + n;
@@ -182,10 +213,11 @@ async function flush() {
 
 function rate(c, grade) {
   const s = st(c) || { iv: 0, reps: 0 };
-  const iv = calcIv(s, grade);
+  const iv = nextIv(c, grade);
   const due = Date.now() + (iv === 0 ? 5 * 60000 : iv * DAY);
-  S.progress[c.id] = { iv, reps: s.reps + 1, due };
-  S.pending[c.id] = { card_id: c.id, iv, reps: s.reps + 1, due: new Date(due).toISOString() };
+  const first = st(c) ? (s.first || null) : dayKey(0);   // старі картки без дати не вважаються новими
+  S.progress[c.id] = { iv, reps: s.reps + 1, due, first };
+  S.pending[c.id] = { card_id: c.id, iv, reps: s.reps + 1, due: new Date(due).toISOString(), first_seen: first };
   const day = dayKey(0);
   S.activity[day] = todayCount() + 1;
   S.pendingAct[day] = { day, count: S.activity[day] };
@@ -195,12 +227,49 @@ function rate(c, grade) {
 // ===== Повторення =====
 const scopeCards = () => activeOf(scope);
 
+// Повторення, що вже чекають, і нові картки в межах денного ліміту (порядок дерева зберігається)
+function buildQueue(cards) {
+  const keep = new Set();
+  cards.forEach((c) => { if (st(c) && st(c).due <= Date.now()) keep.add(c); });
+  let budget = remainingNew();
+  for (const c of cards) {
+    if (!st(c) && isAvail(c) && budget > 0) { keep.add(c); budget--; }
+  }
+  return cards.filter((c) => keep.has(c));
+}
+
 function startReview() {
-  queue = scopeCards().filter(isDue);
+  queue = buildQueue(scopeCards());
   if (!queue.length) return;
-  session = { total: queue.length, done: 0, tries: 0, good: 0 };
+  session = { total: queue.length, done: 0, tries: 0, good: 0, ahead: false };
   view = "review";
   nextCard();
+}
+
+// Повторення наперед: картки, яким ще не час (до 20 найближчих)
+const aheadCards = () => scopeCards().filter((c) => st(c) && st(c).due > Date.now()).sort((a, b) => st(a).due - st(b).due);
+function startAhead() {
+  queue = aheadCards().slice(0, 20);
+  if (!queue.length) return;
+  session = { total: queue.length, done: 0, tries: 0, good: 0, ahead: true };
+  view = "review";
+  nextCard();
+}
+
+async function moreNew() {
+  S.settings.extra = { day: dayKey(0), n: extraToday() + 10 };
+  try { await api.saveSetting("extra_new", S.settings.extra); } catch (e) { toast("Не вдалось зберегти: " + e.message); }
+  render();
+}
+
+async function setLimit() {
+  const v = prompt("Нових карток на день:", String(S.settings.new_per_day));
+  if (v === null) return;
+  const n = parseInt(v, 10);
+  if (Number.isNaN(n) || n < 0 || n > 500) { toast("Введи число від 0 до 500"); return; }
+  S.settings.new_per_day = n;
+  try { await api.saveSetting("new_per_day", n); } catch (e) { toast("Не вдалось зберегти: " + e.message); }
+  render();
 }
 
 function nextCard() {
@@ -217,11 +286,18 @@ function grade(g) {
   session.tries++;
   if (g >= 2) session.good++;
   if (g === 0) queue.push(c); else session.done++;
-  const inQ = {};
-  queue.forEach((x) => { inQ[x.id] = 1; });
-  const fresh = scopeCards().filter((x) => !st(x) && isAvail(x) && !inQ[x.id]);
-  queue = fresh.concat(queue);
-  session.total += fresh.length;
+  if (!session.ahead) {
+    // нові картки, відкриті щойно засвоєною, додаємо в чергу в межах ліміту
+    const inQ = {};
+    queue.forEach((x) => { inQ[x.id] = 1; });
+    let allowed = Math.max(0, remainingNew() - queue.filter((x) => !st(x)).length);
+    const fresh = [];
+    for (const x of scopeCards()) {
+      if (allowed > 0 && !st(x) && isAvail(x) && !inQ[x.id]) { fresh.push(x); allowed--; }
+    }
+    queue = fresh.concat(queue);
+    session.total += fresh.length;
+  }
   nextCard();
 }
 
@@ -344,12 +420,22 @@ function loginHtml(msg) {
 
 function homeHtml() {
   const act = S.cards.filter(isActive);
-  const due = scopeCards().filter(isDue).length;
+  const inScope = scopeCards();
+  const reviews = inScope.filter((c) => st(c) && st(c).due <= Date.now()).length;
+  const newAvail = inScope.filter((c) => !st(c) && isAvail(c)).length;
+  const newPlanned = Math.min(newAvail, remainingNew());
+  const due = reviews + newPlanned;
+  const ahead = Math.min(aheadCards().length, 20);
   const seen = act.filter((c) => st(c)).length;
   let h = '<div class="wrap">';
   h += '<p class="eyebrow">' + (scope === S.root ? "Сьогодні" : esc(scope.title)) + "</p>";
-  h += '<div class="today"><span class="num">' + due + '</span><span class="lab">карток до повторення</span></div>';
-  h += '<button class="btn primary big" id="start"' + (due ? "" : " disabled") + ">" + (due ? "Почати" : "Усе повторено") + "</button>";
+  h += '<div class="today"><span class="num">' + due + '</span><span class="lab">карток на сьогодні</span></div>';
+  h += '<button class="btn primary big" id="start"' + (due ? "" : " disabled") + ">" + (due ? "Почати" : "На сьогодні все") + "</button>";
+  h += '<p class="facts">повторень <b>' + reviews + "</b> &middot; нових <b>" + newPlanned + "</b> (сьогодні нових " + newToday() + " з " + limitToday() + ")</p>";
+  if (newAvail > newPlanned) {
+    h += '<p class="facts"><button class="link" id="moreNew">Ще 10 нових</button> &middot; ще доступно нових: <b>' + (newAvail - newPlanned) + "</b></p>";
+  }
+  if (ahead) h += '<p class="facts"><button class="link" id="ahead">Повторити наперед (' + ahead + ')</button> &middot; ефект від раннього повторення менший</p>';
   h += '<p class="facts">вивчено <b>' + seen + "</b> з " + act.length + " &middot; сьогодні пройдено <b>" + todayCount() + "</b></p>";
   if (scope !== S.root) {
     h += '<div class="scope">Обрано одну гілку. <button class="link" id="clearScope">Усі теми</button></div>';
@@ -367,6 +453,7 @@ function homeHtml() {
   });
   h += '</div><div class="foot"><button class="link" id="exportBtn">Зберегти прогрес у файл</button>' +
     '<button class="link" id="importBtn">Імпорт прогресу з файлу</button>' +
+    '<button class="link" id="setLimit">Ліміт нових: ' + S.settings.new_per_day + '</button>' +
     '<button class="link" id="reset">Скинути прогрес</button><button class="link" id="logout">Вийти</button></div></div>';
   return h;
 }
@@ -453,7 +540,7 @@ async function saveCard(e) {
 // ===== Експорт, імпорт, скидання =====
 function exportProgress() {
   const state = {};
-  Object.entries(S.progress).forEach(([id, p]) => { state[id] = { iv: p.iv, reps: p.reps, due: p.due }; });
+  Object.entries(S.progress).forEach(([id, p]) => { state[id] = { iv: p.iv, reps: p.reps, due: p.due, first: p.first }; });
   const blob = new Blob([JSON.stringify({ state, meta: { days: S.activity } }, null, 1)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
@@ -469,8 +556,8 @@ async function importProgress(file) {
     const rows = [];
     Object.entries(data.state || {}).forEach(([id, p]) => {
       if (!known.has(id)) return;
-      S.progress[id] = { iv: p.iv, reps: p.reps, due: p.due };
-      rows.push({ card_id: id, iv: p.iv, reps: p.reps, due: new Date(p.due).toISOString() });
+      S.progress[id] = { iv: p.iv, reps: p.reps, due: p.due, first: p.first || null };
+      rows.push({ card_id: id, iv: p.iv, reps: p.reps, due: new Date(p.due).toISOString(), first_seen: p.first || null });
     });
     const acts = Object.entries((data.meta && data.meta.days) || {}).map(([day, count]) => {
       S.activity[day] = Math.max(S.activity[day] || 0, count);
@@ -487,7 +574,7 @@ async function importProgress(file) {
 
 // ===== Події =====
 document.addEventListener("click", async (e) => {
-  const el = e.target.closest("[data-id],[data-g],[data-branch],#show,#stop,#start,#openMap,#mapClose,#sheetGo,#clearScope,#reset,#done,#addOpen,#addCancel,#exportBtn,#importBtn,#logout,#retry");
+  const el = e.target.closest("[data-id],[data-g],[data-branch],#show,#stop,#start,#openMap,#mapClose,#sheetGo,#clearScope,#reset,#done,#addOpen,#addCancel,#exportBtn,#importBtn,#logout,#retry,#moreNew,#ahead,#setLimit");
   if (!el) return;
   if (el.dataset.id) {
     selNode = S.nodes[el.dataset.id];
@@ -498,6 +585,9 @@ document.addEventListener("click", async (e) => {
   else if (el.dataset.branch) { scope = S.nodes[el.dataset.branch]; render(); }
   else if (el.id === "clearScope") { scope = S.root; render(); }
   else if (el.id === "start") startReview();
+  else if (el.id === "moreNew") moreNew();
+  else if (el.id === "ahead") startAhead();
+  else if (el.id === "setLimit") setLimit();
   else if (el.id === "show") { showAns = true; render(); }
   else if (el.id === "stop" || el.id === "done") { current = null; queue = []; view = "home"; render(); }
   else if (el.id === "addOpen") openAdd();

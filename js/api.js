@@ -46,14 +46,18 @@ async function supabaseApi() {
       await sb.auth.signOut();
     },
     async loadAll() {
-      const [nodes, cards, labs, progress, activity] = await Promise.all([
+      const [nodes, cards, labs, progress, activity, settings] = await Promise.all([
         readAll("nodes", "position"),
         readAll("cards", "position"),
         readAll("labs", "created_at"),
         readAll("progress", "card_id"),
         readAll("activity", "day"),
+        readAll("settings", "key").catch(() => []),   // таблиці може ще не бути до міграції
       ]);
-      return { nodes, cards, labs, progress, activity };
+      return { nodes, cards, labs, progress, activity, settings };
+    },
+    async saveSetting(key, value) {
+      must(await sb.from("settings").upsert({ key, value }, { onConflict: "key" }));
     },
     async saveProgress(rows) {
       if (!rows.length) return;
@@ -77,7 +81,8 @@ async function supabaseApi() {
 async function mockApi() {
   const seed = await (await fetch("data/seed.json")).json();
   const KEY = "mlcards_mock_v1";
-  let db = JSON.parse(localStorage.getItem(KEY) || "null") || { progress: {}, activity: {}, extra: [] };
+  let db = JSON.parse(localStorage.getItem(KEY) || "null") || { progress: {}, activity: {}, extra: [], settings: {} };
+  db.settings = db.settings || {};
   const persist = () => localStorage.setItem(KEY, JSON.stringify(db));
   return {
     mode: "mock",
@@ -98,7 +103,12 @@ async function mockApi() {
         labs: seed.labs,
         progress: Object.values(db.progress),
         activity: Object.values(db.activity),
+        settings: Object.entries(db.settings).map(([key, value]) => ({ key, value })),
       };
+    },
+    async saveSetting(key, value) {
+      db.settings[key] = value;
+      persist();
     },
     async saveProgress(rows) {
       rows.forEach((r) => { db.progress[r.card_id] = r; });

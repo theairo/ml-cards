@@ -18,6 +18,8 @@
 5. Project Settings, API: Project URL та anon (publishable) ключ вписати в `config.js`.
 6. Скопіювати `.env.local.example` як `.env.local` і вставити SUPABASE_URL та service_role (або secret) ключ. Файл у git не потрапляє.
 
+Зміни схеми для вже створеної бази лежать у `supabase/migrations/` (виконувати по порядку в SQL Editor). `002_daily_limit.sql` додає денний ліміт нових карток.
+
 ## Робота з картками
 
 ```bash

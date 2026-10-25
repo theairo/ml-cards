@@ -6,6 +6,8 @@
 //   node scripts/db.mjs assign <card_id> node=<id> type=A2 depth=1 requires=a,b position=3
 //   node scripts/db.mjs apply <file.json>          upsert { nodes, cards, labs } (повні рядки)
 //   node scripts/db.mjs delete-card <card_id>
+//   node scripts/db.mjs backup                     зберегти копію всіх таблиць у data/backup-<дата>.json
+//   node scripts/db.mjs wipe-content --yes         видалити всі картки, теми (крім кореня), лаби і прогрес карток
 import fs from "node:fs";
 import path from "node:path";
 import { rest, upsert, root } from "./lib.mjs";
@@ -64,6 +66,22 @@ async function main() {
     }
     await rest("PATCH", `cards?id=eq.${encodeURIComponent(id)}`, { body: patch, prefer: "return=minimal" });
     console.log("updated", id, patch);
+  } else if (cmd === "backup") {
+    const out = {};
+    for (const t of ["nodes", "cards", "labs", "progress", "activity", "settings"]) {
+      out[t] = (await rest("GET", t, { query: "?select=*&limit=10000", soft: true })) || [];
+    }
+    const file = path.join(root, "data", `backup-${new Date().toISOString().slice(0, 10)}.json`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(out, null, 1));
+    console.log("saved", file, Object.fromEntries(Object.entries(out).map(([k, v]) => [k, v.length])));
+  } else if (cmd === "wipe-content") {
+    if (!args.includes("--yes")) { console.log("Додай --yes, щоб підтвердити видалення вмісту."); return; }
+    // картки (разом із прогресом, каскадом), лаби, усі теми, окрім кореня дерева
+    await rest("DELETE", "cards", { query: "?id=not.is.null", prefer: "return=minimal" });
+    await rest("DELETE", "labs", { query: "?id=not.is.null", prefer: "return=minimal" });
+    await rest("DELETE", "nodes", { query: "?parent_id=not.is.null", prefer: "return=minimal" });
+    console.log("вміст видалено, корінь дерева лишився");
   } else if (cmd === "delete-card") {
     await rest("DELETE", `cards?id=eq.${encodeURIComponent(args[0])}`, { prefer: "return=minimal" });
     console.log("deleted", args[0]);

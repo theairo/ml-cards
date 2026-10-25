@@ -27,7 +27,7 @@ export function requireEnv() {
   }
 }
 
-export async function rest(method, table, { query = "", body, prefer } = {}) {
+export async function rest(method, table, { query = "", body, prefer, soft = false } = {}) {
   requireEnv();
   // Нові секретні ключі (sb_secret_...) не є JWT: їх передаємо лише в apikey
   const headers = { apikey: KEY, "Content-Type": "application/json" };
@@ -40,6 +40,7 @@ export async function rest(method, table, { query = "", body, prefer } = {}) {
   });
   const text = await res.text();
   if (!res.ok) {
+    if (soft) return null;
     console.error(`${method} ${table}${query} -> ${res.status}\n${text}`);
     process.exit(1);
   }

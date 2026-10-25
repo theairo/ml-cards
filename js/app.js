@@ -1,4 +1,4 @@
-import { createApi } from "./api.js?v=4";
+import { createApi } from "./api.js?v=6";
 import { CONFIG } from "../config.js";
 
 const DAY = 86400000;
@@ -431,6 +431,7 @@ function homeHtml() {
   h += '<p class="eyebrow">' + (scope === S.root ? "Сьогодні" : esc(scope.title)) + "</p>";
   h += '<div class="today"><span class="num">' + due + '</span><span class="lab">карток на сьогодні</span></div>';
   h += '<button class="btn primary big" id="start"' + (due ? "" : " disabled") + ">" + (due ? "Почати" : "На сьогодні все") + "</button>";
+  if (!S.cards.length) h += '<p class="facts">Карток ще немає. Додай першу кнопкою «+ Картка» угорі.</p>';
   h += '<p class="facts">повторень <b>' + reviews + "</b> &middot; нових <b>" + newPlanned + "</b> (сьогодні нових " + newToday() + " з " + limitToday() + ")</p>";
   if (newAvail > newPlanned) {
     h += '<p class="facts"><button class="link" id="moreNew">Ще 10 нових</button> &middot; ще доступно нових: <b>' + (newAvail - newPlanned) + "</b></p>";

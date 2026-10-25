@@ -79,7 +79,11 @@ async function supabaseApi() {
 
 // Локальна імітація: дані беруться з data/seed.json (лише для розробки, у публічний репозиторій не входить)
 async function mockApi() {
-  const seed = await (await fetch("data/seed.json")).json();
+  let seed = await (await fetch("data/seed.json")).json();
+  // ?empty=1: лише корінь дерева, як у порожній базі
+  if (new URLSearchParams(location.search).has("empty")) {
+    seed = { nodes: seed.nodes.filter((n) => !n.parent_id), cards: [], labs: [] };
+  }
   const KEY = "mlcards_mock_v1";
   let db = JSON.parse(localStorage.getItem(KEY) || "null") || { progress: {}, activity: {}, extra: [], settings: {} };
   db.settings = db.settings || {};

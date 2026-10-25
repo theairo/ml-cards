@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ML Cards</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@500;600;700;800&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="top" id="top" hidden>
+  <div class="brand">ML <span>Cards</span></div>
+  <div class="chips" id="chips"></div>
+</div>
+
+<div id="app"></div>
+
+<div class="mapwin" id="map" hidden>
+  <div class="maphead"><b>Мапа тем</b><button class="btn" id="mapClose">Закрити (Esc)</button></div>
+  <div class="mapscroll" id="mapScroll"></div>
+  <div class="sheet" id="sheet" hidden></div>
+  <div class="legend" id="legend"></div>
+</div>
+
+<div class="modal" id="modal" hidden>
+  <form class="box" id="addForm">
+    <h2>Нова картка</h2>
+    <label for="addQ">Питання</label>
+    <textarea id="addQ" rows="3" required></textarea>
+    <label for="addA">Відповідь</label>
+    <textarea id="addA" rows="5" required></textarea>
+    <p class="muted">Картка потрапить у «Нерозподілені». Тему, тип і порядок призначає Claude у чаті.</p>
+    <div class="row">
+      <button type="submit" class="btn primary">Зберегти</button>
+      <button type="button" class="btn" id="addCancel">Скасувати</button>
+    </div>
+  </form>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+<input type="file" id="importFile" accept="application/json" hidden>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

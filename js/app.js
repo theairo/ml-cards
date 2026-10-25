@@ -1,4 +1,4 @@
-import { createApi } from "./api.js";
+import { createApi } from "./api.js?v=3";
 import { CONFIG } from "../config.js";
 
 const DAY = 86400000;
@@ -83,6 +83,8 @@ const activeOf = (n) => cardsOf(n).filter(isActive);
 const st = (c) => S.progress[c.id] || null;
 const interval = (c) => (st(c) ? st(c).iv : 0);
 const rank = (c) => (c.t ? parseInt(c.t.slice(1), 10) : 0);
+// Картка розблоковує наступні, лише коли її засвоєно (оцінка не «Знову»); «Знову» дає інтервал 0
+const learned = (c) => !!st(c) && st(c).iv > 0;
 
 function encounters(n) {
   let k = 0;
@@ -90,18 +92,18 @@ function encounters(n) {
   return Math.max(k, 1);
 }
 
-// Картка вищого типу відкривається після нижчих карток теми; згадана тема має бути пройдена (A1)
+// Картка вищого типу відкривається після засвоєння нижчих карток теми; згадана тема має бути засвоєна (A1)
 function isAvail(c) {
   if (st(c)) return true;
   if (!isActive(c)) return false;
   if (rank(c) > 0) {
     for (const o of c.node.cards) {
-      if (o !== c && isActive(o) && rank(o) > 0 && rank(o) < rank(c) && !st(o)) return false;
+      if (o !== c && isActive(o) && rank(o) > 0 && rank(o) < rank(c) && !learned(o)) return false;
     }
   }
   for (const id of c.requires) {
     const first = S.nodes[id] && S.nodes[id].cards[0];
-    if (first && !st(first)) return false;
+    if (first && !learned(first)) return false;
   }
   return true;
 }
@@ -576,6 +578,7 @@ async function start() {
     render("Не вдалось завантажити дані: " + err.message);
     return;
   }
+  if (api.mode === "mock") window.__dbg = { S, isAvail, learned, st };  // лише для локальної перевірки
   scope = S.root;
   selNode = null;
   view = "home";
